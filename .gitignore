@@ -1,3 +1,7 @@
 # Build output (the installer is published as a GitHub Release)
 build/
 dist/
+
+# Machine-specific notes for the adb-install skill (paths, phones, accounts)
+.claude/local.md
+.claude/settings.local.json
