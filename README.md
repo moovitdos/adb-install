@@ -4,6 +4,19 @@
 
 *Install Android APKs with a double-click and manage your phone from Windows. Hebrew UI.*
 
+![החלון הראשי: פרטי המכשיר](docs/screenshots/device.png)
+
+## צילומי מסך
+
+| | |
+|---|---|
+| ![אפליקציות במכשיר](docs/screenshots/apps.png) | ![פרטי אפליקציה ופעולות](docs/screenshots/app-details.png) |
+| **אפליקציות במכשיר:** שם ואייקון אמיתיים, גודל וגרסה | **פרטי אפליקציה:** תאריכים, נתונים, הרשאות וגיבוי |
+| ![קבצים בטלפון](docs/screenshots/files.png) | ![שיקוף מסך](docs/screenshots/mirror.png) |
+| **קבצים בטלפון:** הורדה, העלאה ומחיקה | **שיקוף מסך:** עברית ואנגלית מתחלפות יחד עם המחשב |
+| ![חלון ההתקנה](docs/screenshots/install.png) | ![תוכנת ההתקנה](docs/screenshots/setup.png) |
+| **התקנה בלחיצה כפולה:** פרטי האפליקציה והסבר בעברית כשמשהו נכשל | **תוכנת ההתקנה:** בלי הרשאות מנהל |
+
 ## מה אפשר לעשות
 
 **התקנת אפליקציות**
