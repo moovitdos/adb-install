@@ -4,6 +4,8 @@
 
 *Install Android APKs with a double-click and manage your phone from Windows. Hebrew UI.*
 
+**אתר התוכנה והורדה:** https://moovitdos.github.io/adb-install/
+
 ![החלון הראשי: פרטי המכשיר](docs/screenshots/device.png)
 
 ## צילומי מסך
@@ -70,6 +72,7 @@ powershell -ExecutionPolicy Bypass -File helper\build-helper.ps1
 | `helper/` | רכיב Java שרץ על הטלפון דרך `app_process`: שמות, אייקונים ופריסת מקלדת |
 | `assets/` | אייקון, לוגו, `helper.dex` ו-`appdata.sh` (גיבוי ושחזור נתונים בטלפון עם root) |
 | `payload/` | adb ו-scrcpy שנארזים בתוך תוכנת ההתקנה |
+| `docs/` | אתר התוכנה (GitHub Pages) וצילומי המסך |
 
 ## רישיונות של רכיבים כלולים
 
