@@ -1,0 +1,94 @@
+# Builds the installer on a GitHub Windows machine with the same build.ps1 used locally.
+# Runs only when started by hand: Actions -> Build -> Run workflow.
+# - Every run uploads ADB-Install-Setup.exe as a downloadable artifact of the run.
+# - With "release" checked it also publishes a GitHub Release vX.Y.Z (the version in src/AppInfo.cs)
+#   with the installer. A release that already has the installer is left untouched.
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'לפרסם Release עם תוכנת ההתקנה (לפי הגרסה ב-src/AppInfo.cs)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = [regex]::Match((Get-Content src/AppInfo.cs -Raw), 'Version\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $v) { throw 'No Version found in src/AppInfo.cs' }
+          "version=$v" | Out-File $env:GITHUB_OUTPUT -Append
+
+      # Windows PowerShell 5, exactly like a local build. csc and WPF come with Windows.
+      - name: Build
+        shell: powershell
+        run: .\build.ps1
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          $f = Get-Item dist/ADB-Install-Setup.exe
+          $sha = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+          @(
+            "### ADB Install ${{ steps.version.outputs.version }}"
+            ''
+            "``ADB-Install-Setup.exe`` · $('{0:N1}' -f ($f.Length / 1MB)) MB"
+            ''
+            "SHA-256: ``$sha``"
+          ) | Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/ADB-Install-Setup.exe
+          archive: false
+          if-no-files-found: error
+
+  release:
+    if: inputs.release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ADB-Install-Setup.exe
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          file=$(find dist -type f -name 'ADB-Install-Setup.exe' | head -n 1)
+          [ -n "$file" ] || { echo "Installer not found in the artifact"; exit 1; }
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -qx 'ADB-Install-Setup.exe'; then
+              echo "::notice::Release $tag already has ADB-Install-Setup.exe; leaving it as is."
+            else
+              gh release upload "$tag" "$file"
+            fi
+          else
+            cat > notes.md << 'EOF'
+          מורידים את `ADB-Install-Setup.exe` מהקבצים למטה ומריצים.
+
+          הקובץ לא חתום דיגיטלית, ולכן Windows עשוי להציג אזהרת SmartScreen: "מידע נוסף" ← "הפעל בכל זאת".
+          EOF
+            gh release create "$tag" "$file" --target "$GITHUB_SHA" --title "ADB Install $VERSION" --notes-file notes.md --generate-notes
+          fi

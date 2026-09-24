@@ -40,6 +40,8 @@ powershell -ExecutionPolicy Bypass -File helper\build-helper.ps1
 
 Then rebuild the app so the new `helper.dex` is embedded. The app pushes the helper to the phone once per session, so restart the app after changing it.
 
+GitHub Actions (`.github/workflows/build.yml`) runs the same `build.ps1` on `windows-latest` and uploads `ADB-Install-Setup.exe` as an unzipped artifact. It runs **only when started by hand** (`workflow_dispatch`) — the user wants no automatic runs on push, PRs or tags, so don't add such triggers. The run has a `release` checkbox: when checked it also publishes Release `v<Version from src/AppInfo.cs>` on the built commit, and it leaves alone a release that already has the installer. CI never rebuilds `helper.dex`; it uses the committed one. The Hebrew how-to for users is in the README under "בנייה ב-GitHub Actions".
+
 ## UI conventions
 
 The look is consistent because everything goes through `Theme` (`src/Common.cs`). Reuse its pieces instead of styling controls by hand:

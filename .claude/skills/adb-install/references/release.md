@@ -13,4 +13,10 @@
    gh release create vX.Y.Z dist/ADB-Install-Setup.exe --title "ADB Install X.Y.Z" --notes-file notes.md
    ```
    Release notes in Hebrew: a one-line "download and run" note, a short "what's new" list, and the SmartScreen note (the exe is unsigned: "מידע נוסף" ← "הפעל בכל זאת"). If `gh`'s active account can't create releases in the repo, prefix with `GH_TOKEN="$(gh auth token --user <owner>)"` for that command only.
+
+   **Alternative — let CI publish it (only when the user asks for it):** after pushing the version bump, start the `Build` workflow on `main` with the release box checked:
+   ```bash
+   gh workflow run build.yml --ref main -f release=true
+   ```
+   It builds on GitHub's Windows runner and creates release `v<Version>` on that commit with the installer and a short Hebrew note (download + SmartScreen) plus GitHub's generated changelog link. Add the "what's new" list afterwards with `gh release edit vX.Y.Z --notes-file notes.md`. If the release already has the installer (the manual flow above), the workflow leaves it untouched.
 9. **README** — update the feature list and, when the UI changed visibly, the screenshots (`testing.md` → screenshots).

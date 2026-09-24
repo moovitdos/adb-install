@@ -5,6 +5,7 @@
 | Path | What it is |
 |---|---|
 | `build.ps1` | The whole build: two `csc` calls (app, then setup with everything embedded) |
+| `.github/workflows/build.yml` | Manual-only CI: runs `build.ps1` on GitHub's Windows runner, uploads the installer; with the `release` checkbox it also publishes the Release |
 | `src/AppInfo.cs` | App name and version — the single place to bump the version |
 | `src/app.manifest` | asInvoker (no UAC prompt, even though the setup's name contains "Setup"), PerMonitorV2 DPI |
 | `src/Common.cs` | `Theme`: palette (light/dark), shared XAML styles (buttons, input, thin scrollbars), UI building blocks, image loading, size formatting |

@@ -1,5 +1,7 @@
 # ADB Install
 
+[![Build](https://github.com/moovitdos/adb-install/actions/workflows/build.yml/badge.svg)](https://github.com/moovitdos/adb-install/actions/workflows/build.yml)
+
 התקנת קובצי APK לטלפון אנדרואיד בלחיצה כפולה, וניהול הטלפון מהמחשב. תוכנה ל-Windows עם ממשק בעברית.
 
 *Install Android APKs with a double-click and manage your phone from Windows. Hebrew UI.*
@@ -64,6 +66,32 @@ powershell -ExecutionPolicy Bypass -File helper\build-helper.ps1
 
 מספר הגרסה נמצא ב-`src/AppInfo.cs`.
 
+### בנייה ב-GitHub Actions (בלי מחשב Windows)
+
+אפשר לבנות את תוכנת ההתקנה גם בשרתים של GitHub, בלי להתקין או להריץ שום דבר במחשב. הבנייה רצה על Windows עם אותו `build.ps1`, ומוגדרת בקובץ [`.github/workflows/build.yml`](.github/workflows/build.yml).
+
+**הרצה (רק כשמפעילים אותה, לא אוטומטית)**
+1. לשונית **Actions** ← **Build** (ברשימה בצד) ← כפתור **Run workflow**.
+2. בוחרים ענף (בדרך כלל `main`). כדי לפרסם גם גרסה, מסמנים את התיבה "לפרסם Release" (פירוט בהמשך).
+3. לוחצים על **Run workflow** הירוק. הבנייה לוקחת כמה דקות.
+
+**הורדת הקובץ שנבנה**
+1. בלשונית **Actions** נכנסים להרצה שהסתיימה בהצלחה (סימן ✓ ירוק).
+2. בתחתית העמוד, תחת **Artifacts**, לוחצים על `ADB-Install-Setup.exe`.
+
+צריך להיות מחוברים לחשבון GitHub כדי להוריד, והקובץ נשמר ‎90 יום. בראש עמוד ההרצה מוצגים הגרסה, הגודל וה-SHA-256 של הקובץ.
+
+**פרסום גרסה חדשה (Release)**
+1. מעדכנים את `Version` ב-`src/AppInfo.cs` (למשל ל-`1.3.1`), מבצעים commit ודוחפים ל-`main`.
+2. מריצים את **Build** כמו למעלה, על `main`, עם סימון בתיבה "לפרסם Release".
+3. בסוף הבנייה נוצר Release בשם `ADB Install 1.3.1` (תגית `v1.3.1`) עם `ADB-Install-Setup.exe` מצורף. אחר כך אפשר לערוך את תיאור הגרסה בעמוד ה-Releases.
+
+מספר הגרסה נלקח מ-`src/AppInfo.cs`, ולכן חשוב לעדכן אותו לפני הפרסום. אם כבר קיים Release לגרסה הזו עם קובץ התקנה, הוא נשאר כמו שהוא ולא נדרס.
+
+**ב-Fork:** GitHub מכבה את ה-Actions ב-fork חדש. מפעילים אותן פעם אחת בלשונית **Actions**, ומשם הכול עובד אותו דבר.
+
+הבנייה ב-GitHub לא בונה מחדש את `helper.dex`, אלא משתמשת בקובץ שנמצא ב-`assets/`. אחרי שינוי ב-`helper/Helper.java` צריך לבנות אותו במחשב (כמו שמוסבר למעלה) ולעשות לו commit.
+
 ## מבנה הפרויקט
 
 | תיקייה | תוכן |
@@ -73,6 +101,7 @@ powershell -ExecutionPolicy Bypass -File helper\build-helper.ps1
 | `assets/` | אייקון, לוגו, `helper.dex` ו-`appdata.sh` (גיבוי ושחזור נתונים בטלפון עם root) |
 | `payload/` | adb ו-scrcpy שנארזים בתוך תוכנת ההתקנה |
 | `docs/` | אתר התוכנה (GitHub Pages) וצילומי המסך |
+| `.github/workflows/` | הבנייה ב-GitHub Actions (הרצה ידנית) ופרסום Release |
 
 ## רישיונות של רכיבים כלולים
 
