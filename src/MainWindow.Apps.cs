@@ -16,7 +16,7 @@ using Path = System.IO.Path;
 partial class MainWindow
 {
     List<AppEntry> apps;
-    bool appsLoading, iconsForSystem, backupAllPending;
+    bool appsLoading, iconsForSystem, backupAllPending, appsRoot;
     readonly HashSet<string> selectedApps = new HashSet<string>();
     readonly Dictionary<string, BitmapSource> iconCache = new Dictionary<string, BitmapSource>();
     string expandedPkg, appFilter = "", appSort = "name";
@@ -34,7 +34,7 @@ partial class MainWindow
 
         // Toolbar: search | sort | system | refresh
         var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var refresh = Btn("רענן", "Btn", () => { apps = null; iconCache.Clear(); Render(); });
+        var refresh = Btn("רענן", "Btn", () => { apps = null; iconCache.Clear(); Root.Forget(d.Serial); Render(); });
         refresh.Margin = new Thickness(8, 0, 0, 0);
         DockPanel.SetDock(refresh, Dock.Right);
         var sys = Btn(showSystem ? "✓ אפליקציות מערכת" : "אפליקציות מערכת", showSystem ? "Primary" : "Btn", () => { showSystem = !showSystem; Render(); });
@@ -79,13 +79,15 @@ partial class MainWindow
                 t.VerticalAlignment = VerticalAlignment.Center;
                 t.Margin = new Thickness(0, 0, 12, 6);
                 selBar.Children.Add(t);
-                selBar.Children.Add(Theme.Small(Btn("גיבוי הנבחרות", "Primary", () => BackupApps(apps.Where(a => selectedApps.Contains(a.Pkg)).ToList()))));
+                selBar.Children.Add(Theme.Small(Btn("גיבוי הנבחרות", "Primary", () => BackupApps(apps.Where(a => selectedApps.Contains(a.Pkg)).ToList(), false))));
+                if (appsRoot) selBar.Children.Add(Theme.Small(Btn("גיבוי הנבחרות עם נתונים", "Btn", () => BackupApps(apps.Where(a => selectedApps.Contains(a.Pkg)).ToList(), true))));
                 selBar.Children.Add(Theme.Small(Btn("ניקוי בחירה", "Btn", () => { selectedApps.Clear(); fill(); })));
             }
             else
             {
                 selBar.Children.Add(Theme.Small(Btn("בחירת כל המוצגות", "Btn", () => { foreach (var a in Visible()) selectedApps.Add(a.Pkg); fill(); })));
-                selBar.Children.Add(Theme.Small(Btn("גיבוי כל האפליקציות שהותקנו", "Btn", () => BackupApps(apps.Where(a => !a.System).ToList()))));
+                selBar.Children.Add(Theme.Small(Btn("גיבוי כל האפליקציות שהותקנו", "Btn", () => BackupApps(apps.Where(a => !a.System).ToList(), false))));
+                if (appsRoot) selBar.Children.Add(Theme.Small(Btn("גיבוי כולן עם נתונים", "Btn", () => BackupApps(apps.Where(a => !a.System).ToList(), true))));
             }
         };
 
@@ -115,14 +117,16 @@ partial class MainWindow
                 Bg(() =>
                 {
                     List<AppEntry> list;
-                    try { list = Phone.Apps(serial); } finally { UiDo(() => appsLoading = false); }
+                    bool hasRoot;
+                    try { list = Phone.Apps(serial); hasRoot = Root.Likely(serial); } finally { UiDo(() => appsLoading = false); }
                     UiDo(() =>
                     {
                         if (current != serial) return;
                         apps = list;
+                        appsRoot = hasRoot;
                         iconsForSystem = false;
                         if (page == "apps") Render();
-                        if (backupAllPending) { backupAllPending = false; BackupApps(apps.Where(a => !a.System).ToList()); }
+                        if (backupAllPending) { backupAllPending = false; BackupApps(apps.Where(a => !a.System).ToList(), false); }
                     });
                 });
             }
@@ -286,7 +290,8 @@ partial class MainWindow
         actions.Children.Add(Theme.Small(Btn("עצירה בכוח", "Btn", () => Act(serial, "am force-stop " + pkg, "האפליקציה נעצרה"))));
         actions.Children.Add(Theme.Small(Btn("הרשאות", "Btn", () => ShowPermissions(serial, a))));
         actions.Children.Add(Theme.Small(Btn("פרטים בטלפון", "Btn", () => Act(serial, "am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:" + pkg, "מסך פרטי האפליקציה נפתח בטלפון"))));
-        actions.Children.Add(Theme.Small(Btn("גיבוי APK", "Btn", () => BackupApps(new List<AppEntry> { a }))));
+        actions.Children.Add(Theme.Small(Btn("גיבוי APK", "Btn", () => BackupApps(new List<AppEntry> { a }, false))));
+        if (appsRoot) actions.Children.Add(Theme.Small(Btn("גיבוי עם נתונים", "Btn", () => BackupApps(new List<AppEntry> { a }, true))));
         actions.Children.Add(Theme.Small(Btn("ניקוי נתונים", "Btn", () =>
             Confirm("לנקות את הנתונים של " + a.Title + "?", "כל הנתונים של האפליקציה יימחקו (התחברות, הגדרות, קבצים שמורים), כאילו הותקנה עכשיו.", "נקה נתונים", true,
                 () => Act(serial, "pm clear " + pkg, "הנתונים נוקו")))));
@@ -389,7 +394,8 @@ partial class MainWindow
 
     // ---------- backup ----------
 
-    void BackupApps(List<AppEntry> list)
+    // withData (root): each app becomes an .apks file with its data, which ADB Install installs back with the data.
+    void BackupApps(List<AppEntry> list, bool withData)
     {
         var d = ReadyDevice();
         if (d == null || list.Count == 0) return;
@@ -398,26 +404,45 @@ partial class MainWindow
             ? Settings.Sub(Settings.Backups)
             : Path.Combine(Settings.Sub(Settings.Backups), Settings.SafeName(d.Model + " " + DateTime.Now.ToString("yyyy-MM-dd HH-mm")));
         Directory.CreateDirectory(folder);
-        var p = ShowProgress(list.Count == 1 ? "גיבוי " + list[0].Title : "גיבוי " + list.Count + " אפליקציות");
+        var p = ShowProgress((list.Count == 1 ? "גיבוי " + list[0].Title : "גיבוי " + list.Count + " אפליקציות") + (withData ? " עם נתונים" : ""));
         Bg(() =>
         {
+            if (withData)
+            {
+                Progress(p, "מבקש הרשאת root. אם מופיעה בקשה בטלפון, יש לאשר אותה.", 0, list.Count);
+                var why = Root.Acquire(serial);
+                if (why != null) { UiDo(() => { CloseDialog(); Toast(why, "err"); }); return; }
+            }
             var failed = new List<string>();
-            string last = null;
+            string last = null, firstError = null;
             int done = 0;
             for (int i = 0; i < list.Count && !p.Cancelled; i++)
             {
-                Progress(p, (list.Count > 1 ? (i + 1) + " מתוך " + list.Count + ": " : "") + list[i].Title, i, list.Count);
-                try { last = SaveApk(serial, list[i], folder); done++; }
-                catch { failed.Add(list[i].Title); }
+                var a = list[i];
+                int at = i;
+                var prefix = (list.Count > 1 ? (i + 1) + " מתוך " + list.Count + ": " : "") + a.Title;
+                Progress(p, prefix, i, list.Count);
+                try
+                {
+                    last = withData ? AppBackup.Create(serial, a.Pkg, a.Title, a.Version, folder, s => Progress(p, prefix + " · " + s, at, list.Count))
+                                    : SaveApk(serial, a, folder);
+                    done++;
+                }
+                catch (Exception ex)
+                {
+                    failed.Add(a.Title);
+                    if (firstError == null) firstError = ex.Message;
+                }
             }
             UiDo(() =>
             {
                 CloseDialog();
                 selectedApps.Clear();
                 var msg = done == 1 && list.Count == 1 ? "נשמר: " + Path.GetFileName(last) : "גובו " + done + " אפליקציות";
-                if (failed.Count > 0) msg += " · נכשלו: " + string.Join(", ", failed.Take(3)) + (failed.Count > 3 ? "..." : "");
+                if (failed.Count > 0 && list.Count == 1) msg = "הגיבוי נכשל: " + firstError;
+                else if (failed.Count > 0) msg += " · נכשלו: " + string.Join(", ", failed.Take(3)) + (failed.Count > 3 ? "..." : "");
                 var show = list.Count == 1 && last != null ? last : folder;
-                Toast(msg, failed.Count > 0 ? "warn" : "ok", "הצג בתיקייה", () => { if (File.Exists(show)) Theme.ShowInExplorer(show); else OpenFile(show); });
+                Toast(msg, failed.Count == 0 ? "ok" : done == 0 ? "err" : "warn", "הצג בתיקייה", () => { if (File.Exists(show)) Theme.ShowInExplorer(show); else OpenFile(show); });
                 if (page == "apps") Render();
             });
         });
@@ -426,29 +451,17 @@ partial class MainWindow
     // Pulls an app's APK(s). Split apps become one .apks file that ADB Install can install back.
     static string SaveApk(string serial, AppEntry a, string folder)
     {
-        var paths = Adb.Shell(serial, "pm path " + a.Pkg).Split('\n').Select(l => l.Trim())
-                      .Where(l => l.StartsWith("package:")).Select(l => l.Substring(8)).ToList();
-        if (paths.Count == 0) throw new Exception("לא נמצא קובץ APK עבור " + a.Pkg);
         var name = Settings.SafeName(a.Title + (string.IsNullOrEmpty(a.Version) ? "" : " " + a.Version));
-        var tmp = Path.Combine(Path.GetTempPath(), "ADB Install", "pull-" + Guid.NewGuid().ToString("N").Substring(0, 8));
-        Directory.CreateDirectory(tmp);
+        var tmp = AppBackup.NewTemp();
         try
         {
-            foreach (var p in paths)
-            {
-                string o;
-                if (Adb.Run("-s " + serial + " pull " + Adb.Q(p) + " " + Adb.Q(Path.Combine(tmp, Path.GetFileName(p))), out o) != 0)
-                    throw new Exception(o);
-            }
-            string dest = Path.Combine(folder, name + (paths.Count == 1 ? ".apk" : ".apks"));
+            var files = AppBackup.PullApks(serial, a.Pkg, tmp);
+            string dest = Path.Combine(folder, name + (files.Count == 1 ? ".apk" : ".apks"));
             if (File.Exists(dest)) File.Delete(dest);
-            if (paths.Count == 1) File.Copy(Directory.GetFiles(tmp)[0], dest);
+            if (files.Count == 1) File.Copy(files[0], dest);
             else ZipFile.CreateFromDirectory(tmp, dest);
             return dest;
         }
-        finally
-        {
-            try { Directory.Delete(tmp, true); } catch { }
-        }
+        finally { AppBackup.Delete(tmp); }
     }
 }

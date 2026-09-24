@@ -382,6 +382,8 @@ class PackageFile
     public List<string> Apks = new List<string>();
     public List<KeyValuePair<string, string>> Obbs = new List<KeyValuePair<string, string>>(); // local -> device path
     public string TempDir;
+    public string DataDir;                                  // app data from an ADB Install backup (AppBackup), if any
+    public Dictionary<string, string> DataInfo = new Dictionary<string, string>();
 
     public bool IsBundle { get { return Apks.Count > 1; } }
 
@@ -430,10 +432,23 @@ class PackageFile
                 e.ExtractToFile(dest, true);
                 p.Obbs.Add(new KeyValuePair<string, string>(dest, "/sdcard/" + e.FullName));
             }
+            foreach (var e in zip.Entries)
+            {
+                if (!e.FullName.Replace('\\', '/').StartsWith(AppBackup.DataFolder + "/") || e.FullName.EndsWith("/")) continue;
+                p.DataDir = Path.Combine(p.TempDir, AppBackup.DataFolder);
+                Directory.CreateDirectory(p.DataDir);
+                e.ExtractToFile(Path.Combine(p.DataDir, Path.GetFileName(e.FullName)), true);
+            }
         }
 
         var baseApk = p.Apks.FirstOrDefault(a => ApkReader.SplitName(a) == null) ?? p.Apks[0];
         p.Info = ApkReader.Read(baseApk);
+        if (p.DataDir != null)
+        {
+            p.DataInfo = AppBackup.ReadInfo(p.DataDir);
+            string owner;
+            if (p.DataInfo.TryGetValue("package", out owner) && owner != p.Info.Package) p.DataDir = null;
+        }
         return p;
     }
 

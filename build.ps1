@@ -11,9 +11,9 @@ $common = @("/nologo", "/codepage:65001", "/optimize+", "/target:winexe",
 
 New-Item -ItemType Directory -Force "$root\build", "$root\dist" | Out-Null
 
-$appSrc = "AppInfo", "Common", "Settings", "Adb", "Phone", "KeyboardSync", "Package", "InstallWindow",
+$appSrc = "AppInfo", "Common", "Settings", "Adb", "Phone", "Root", "KeyboardSync", "Package", "InstallWindow",
           "MainWindow", "MainWindow.Apps", "MainWindow.Files", "MainWindow.Screen", "MainWindow.Logcat", "App" | ForEach-Object { "$root\src\$_.cs" }
-& $csc @common "/resource:$root\assets\logo.png,logo.png" "/resource:$root\assets\helper.dex,helper.dex" "/out:$root\build\AdbInstall.exe" @appSrc
+& $csc @common "/resource:$root\assets\logo.png,logo.png" "/resource:$root\assets\helper.dex,helper.dex" "/resource:$root\assets\appdata.sh,appdata.sh" "/out:$root\build\AdbInstall.exe" @appSrc
 if ($LASTEXITCODE) { throw "AdbInstall.exe build failed" }
 
 $payload = @("/resource:$root\build\AdbInstall.exe,payload.AdbInstall.exe", "/resource:$root\assets\logo.png,logo.png")

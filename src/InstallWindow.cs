@@ -60,7 +60,7 @@ class Target
     public Dev Dev;
     public int Sdk;
     public string[] Abis = new string[0];
-    public bool Installed;
+    public bool Installed, HasRoot;
     public string InstalledName;
     public long InstalledCode;
 }
@@ -165,6 +165,12 @@ class InstallWindow
     string failHead, failWhy, failPkg;
     bool failOfferReinstall;
     DispatcherTimer closeTimer;
+    bool restoreData;  // put the data carried in the file (a backup made by ADB Install) into the installed app
+    bool keepData;     // if the device refuses an update in place, back up, reinstall and restore the data (root)
+    string backupPath; // backup made before uninstalling, shown to the user
+
+    const string DataCaveat = "חשוב לדעת: יש אפליקציות שלא יודעות לקרוא נתונים של גרסה חדשה יותר, ויש אפליקציות (למשל של בנקים) שיבקשו להתחבר מחדש.";
+    const string LoginCaveat = "חשוב לדעת: יש אפליקציות (למשל של בנקים) שיבקשו להתחבר מחדש.";
 
     public InstallWindow(string file, string preferSerial)
     {
@@ -195,7 +201,7 @@ class InstallWindow
         W.KeyDown += (s, e) =>
         {
             if (e.Key == Key.Escape) W.Close();
-            if (e.Key == Key.Enter && bInstall != null && bInstall.IsVisible && bInstall.IsEnabled) Install(selected.ToList());
+            if (e.Key == Key.Enter && bInstall != null && bInstall.IsVisible && bInstall.IsEnabled) InstallSelected(selected.ToList());
         };
         W.MouseEnter += (s, e) => StopCountdown();
         W.Closed += (s, e) => { if (pkg != null) pkg.Cleanup(); };
@@ -210,8 +216,8 @@ class InstallWindow
     {
         if (string.IsNullOrEmpty(text)) { hintBox.Visibility = Visibility.Collapsed; return; }
         hint.Text = text;
-        hint.Foreground = Theme.B(kind == "warn" ? "WARN" : "RED");
-        hintBox.Background = Theme.B(kind == "warn" ? "WARNSOFT" : "REDSOFT");
+        hint.Foreground = Theme.B(kind == "warn" ? "WARN" : kind == "info" ? "ACCENT" : "RED");
+        hintBox.Background = Theme.B(kind == "warn" ? "WARNSOFT" : kind == "info" ? "ACCENTSOFT" : "REDSOFT");
         hintBox.Visibility = Visibility.Visible;
     }
 
@@ -261,6 +267,7 @@ class InstallWindow
         if (details != null) { log.Text = details; log.ScrollToEnd(); Show("log"); } else Show("none");
         var bs = new List<Button>();
         if (canRefresh) bs.Add(Btn("רענן מכשירים", "Primary", Start));
+        if (backupPath != null) bs.Add(Btn("הצג את הגיבוי", "Btn", ShowBackup));
         if (details != null) bs.Add(Btn("העתק פרטים", "Btn", CopyLog));
         bs.Add(CloseBtn());
         SetButtons(bs.ToArray());
@@ -269,6 +276,8 @@ class InstallWindow
     }
 
     void CopyLog() { try { Clipboard.SetText(log.Text); } catch { } }
+
+    void ShowBackup() { if (backupPath != null) Theme.ShowInExplorer(backupPath); }
 
     // ---------- package info ----------
 
@@ -294,18 +303,29 @@ class InstallWindow
         if (i.MinSdk > 0) appTags.Children.Add(Theme.Pill("אנדרואיד " + Adb.AndroidName(i.MinSdk) + "+", "SUB", "GRAYSOFT"));
         if (pkg.IsBundle) appTags.Children.Add(Theme.Pill("חבילה: " + pkg.Apks.Count + " קבצים", "ACCENT", "ACCENTSOFT"));
         if (pkg.Obbs.Count > 0) appTags.Children.Add(Theme.Pill("כולל OBB", "ACCENT", "ACCENTSOFT"));
+        if (pkg.DataDir != null) appTags.Children.Add(Theme.Pill("כולל נתונים", "ACCENT", "ACCENTSOFT"));
         infoCard.Visibility = Visibility.Visible;
     }
 
     // Compares the file's version with what's installed on a device.
     void Compare(Target t, out string text, out string fg, out string bg)
     {
-        var i = pkg.Info;
-        if (i.MinSdk > 0 && t.Sdk > 0 && t.Sdk < i.MinSdk) { text = "אנדרואיד ישן מדי"; fg = "RED"; bg = "REDSOFT"; return; }
+        if (TooOld(t)) { text = "אנדרואיד ישן מדי"; fg = "RED"; bg = "REDSOFT"; return; }
         if (!t.Installed) { text = "לא מותקנת"; fg = "SUB"; bg = "GRAYSOFT"; return; }
         if (SameVersion(t)) { text = "מותקנת גרסה זהה"; fg = "SUB"; bg = "GRAYSOFT"; return; }
-        if (t.InstalledCode < i.VersionCode) { text = "שדרוג מ-" + t.InstalledName; fg = "ACCENT"; bg = "ACCENTSOFT"; return; }
+        if (!Downgrade(t)) { text = "שדרוג מ-" + t.InstalledName; fg = "ACCENT"; bg = "ACCENTSOFT"; return; }
         text = "במכשיר גרסה חדשה יותר: " + t.InstalledName; fg = "WARN"; bg = "WARNSOFT";
+    }
+
+    bool TooOld(Target t)
+    {
+        var i = pkg.Info;
+        return i.MinSdk > 0 && t.Sdk > 0 && t.Sdk < i.MinSdk;
+    }
+
+    bool Downgrade(Target t)
+    {
+        return t.Installed && !SameVersion(t) && t.InstalledCode > pkg.Info.VersionCode;
     }
 
     // Same version name counts as the same version even if the build differs (e.g. arm64 vs armv7 builds).
@@ -322,6 +342,8 @@ class InstallWindow
     {
         Busy(pkg == null ? "קורא את הקובץ..." : "מחפש מכשירים...");
         Show("none");
+        restoreData = keepData = false;
+        backupPath = null;
         Bg(() =>
         {
             if (!File.Exists(file)) throw new UserError("הקובץ לא נמצא: " + file);
@@ -338,6 +360,7 @@ class InstallWindow
                 var t = new Target { Dev = d, Sdk = Adb.Sdk(d.Serial), Abis = Adb.Abis(d.Serial) };
                 if (pkg.Info.Package != null)
                     t.Installed = Adb.InstalledVersion(d.Serial, pkg.Info.Package, out t.InstalledName, out t.InstalledCode);
+                if (t.Installed || pkg.DataDir != null) t.HasRoot = Root.Likely(d.Serial);
                 ts.Add(t);
             }
             UiDo(() => OnDevices(devs, ts));
@@ -371,9 +394,9 @@ class InstallWindow
         BuildList();
         Status("ask", "באיזה מכשיר להתקין?");
         ShowHint(null, null);
-        bInstall = Btn("התקן במסומנים", "Primary", () => Install(selected.ToList()));
+        bInstall = Btn("התקן במסומנים", "Primary", () => InstallSelected(selected.ToList()));
         bInstall.IsEnabled = false;
-        SetButtons(bInstall, Btn("התקן בכולם", "Btn", () => Install(targets)), Btn("רענן", "Btn", Start), CloseBtn());
+        SetButtons(bInstall, Btn("התקן בכולם", "Btn", () => InstallSelected(targets)), Btn("רענן", "Btn", Start), CloseBtn());
     }
 
     void BuildList()
@@ -400,45 +423,100 @@ class InstallWindow
                     if (on) selected.Add(t); else selected.Remove(t);
                     if (bInstall != null) bInstall.IsEnabled = selected.Count > 0;
                 },
-                () => Install(new List<Target> { t })));
+                () => Consider(t)));
         }
         Show("list");
     }
 
-    // One device: install right away unless something deserves a warning first.
-    void Consider(Target t)
+    // Several devices from the list: one question that covers all of them before anything risky.
+    void InstallSelected(List<Target> ts)
+    {
+        if (ts.Count == 0) return;
+        if (ts.Count == 1) { Consider(ts[0]); return; }
+        var notes = new List<string>();
+        var older = ts.Where(Downgrade).Select(t => t.Dev.Model).ToList();
+        var tooOld = ts.Where(TooOld).Select(t => t.Dev.Model).ToList();
+        if (older.Count > 0)
+            notes.Add("במכשירים האלה מותקנת גרסה חדשה יותר מהקובץ: " + string.Join(", ", older) + ". אם מכשיר לא יאפשר לחזור לגרסה ישנה, יהיה צורך להסיר את האפליקציה, וכל הנתונים שלה יימחקו.");
+        if (tooOld.Count > 0)
+            notes.Add("גרסת האנדרואיד ישנה מדי עבור האפליקציה ב: " + string.Join(", ", tooOld) + ".");
+        if (pkg.DataDir != null)
+            notes.Add("הנתונים שבקובץ מוחזרים רק בהתקנה על מכשיר אחד, ולכן תותקן רק האפליקציה.");
+        if (notes.Count == 0) { Install(ts); return; }
+        Ask("warn", "לפני ההתקנה", string.Join("\n\n", notes), Btn("התקן בכל זאת", "Primary", () => Install(ts)));
+    }
+
+    // One device: install right away unless something deserves a question first. Each answer continues with the next check.
+    void Consider(Target t) { Consider(t, 0); }
+
+    void Consider(Target t, int step)
     {
         var i = pkg.Info;
-        if (pkg.IsBundle && t.Sdk > 0 && t.Sdk < 21)
+        if (step <= 0 && pkg.IsBundle && t.Sdk > 0 && t.Sdk < 21)
         {
             Fail("המכשיר לא תומך בחבילות מפוצלות", "קובצי XAPK / APKS / APKM דורשים אנדרואיד 5 ומעלה, והמכשיר מריץ אנדרואיד " + Adb.AndroidName(t.Sdk) + ".", null, false);
             return;
         }
-        if (i.MinSdk > 0 && t.Sdk > 0 && t.Sdk < i.MinSdk)
+        if (step <= 1 && TooOld(t))
         {
-            Ask("האפליקציה לא מתאימה למכשיר",
+            Ask("warn", "האפליקציה לא מתאימה למכשיר",
                 "האפליקציה דורשת אנדרואיד " + Adb.AndroidName(i.MinSdk) + " ומעלה, והמכשיר " + t.Dev.Model + " מריץ אנדרואיד " + Adb.AndroidName(t.Sdk) + ".",
-                "נסה בכל זאת", t);
+                Btn("נסה בכל זאת", "Primary", () => Consider(t, 2)));
             return;
         }
-        if (t.Installed && !SameVersion(t) && t.InstalledCode > i.VersionCode)
-        {
-            Ask("במכשיר מותקנת גרסה חדשה יותר",
-                "במכשיר מותקנת גרסה " + t.InstalledName + ", והקובץ הוא גרסה " + i.VersionName + " (ישנה יותר). אם השנמוך ייכשל, אפשר יהיה להסיר ולהתקין מחדש.",
-                "התקן בכל זאת", t);
-            return;
-        }
+        if (step <= 2 && pkg.DataDir != null) { AskData(t); return; }
+        if (step <= 3 && Downgrade(t)) { AskDowngrade(t); return; }
         Install(new List<Target> { t });
     }
 
-    void Ask(string title, string text, string okText, Target t)
+    // The file is a backup made by ADB Install that also carries the app's data.
+    void AskData(Target t)
+    {
+        string text = "זה גיבוי של " + AppTitle + " יחד עם הנתונים שלה";
+        string device, date;
+        DateTime when;
+        if (pkg.DataInfo.TryGetValue("date", out date) && DateTime.TryParse(date, out when))
+            text += ", מתאריך ‎" + when.ToString("dd/MM/yyyy");
+        if (pkg.DataInfo.TryGetValue("device", out device) && device.Length > 0) text += " (מ-" + device + ")";
+        text += ".";
+        if (!t.HasRoot)
+        {
+            Ask("ask", "הקובץ כולל גם את נתוני האפליקציה",
+                text + " כדי להחזיר את הנתונים צריך מכשיר עם root, וב-" + t.Dev.Model + " לא נמצא root. אפשר להתקין את האפליקציה בלי הנתונים.",
+                Btn("התקן בלי הנתונים", "Primary", () => { restoreData = false; Consider(t, 3); }));
+            return;
+        }
+        text += " אחרי ההתקנה אפשר להחזיר את הנתונים: התחברות, הגדרות וקבצים.";
+        if (t.Installed) text += "\nהנתונים שיש עכשיו לאפליקציה ב-" + t.Dev.Model + " יוחלפו בנתונים מהגיבוי.";
+        Ask("ask", "הקובץ כולל גם את נתוני האפליקציה", text,
+            Btn("התקן ושחזר נתונים", "Primary", () => { restoreData = true; Consider(t, 3); }),
+            Btn("התקן בלי הנתונים", "Btn", () => { restoreData = false; Consider(t, 3); }));
+    }
+
+    void AskDowngrade(Target t)
+    {
+        var text = "ב-" + t.Dev.Model + " מותקנת גרסה " + t.InstalledName + ", והקובץ הוא גרסה " + pkg.Info.VersionName + " (ישנה יותר).\n\n";
+        if (!t.HasRoot)
+        {
+            Ask("warn", "במכשיר מותקנת גרסה חדשה יותר",
+                text + "בדרך כלל אנדרואיד מאפשר לחזור לגרסה ישנה רק אחרי הסרה של האפליקציה, והסרה מוחקת את כל הנתונים שלה (התחברות, הגדרות, קבצים). ננסה קודם להתקין בלי להסיר.",
+                Btn("נסה להתקין", "Primary", () => Install(new List<Target> { t })));
+            return;
+        }
+        Ask("warn", "במכשיר מותקנת גרסה חדשה יותר",
+            text + "בדרך כלל אנדרואיד מאפשר לחזור לגרסה ישנה רק אחרי הסרה של האפליקציה. במכשיר יש root, ולכן אפשר לשמור את הנתונים: "
+                 + "אם יהיה צורך להסיר, האפליקציה והנתונים שלה יגובו קודם למחשב, ואחרי ההתקנה " + (restoreData ? "יוחזרו הנתונים מהקובץ." : "הנתונים יוחזרו.") + "\n" + DataCaveat,
+            Btn(restoreData ? "התקן" : "התקן ושמור נתונים", "Primary", () => { keepData = true; Install(new List<Target> { t }); }));
+    }
+
+    void Ask(string kind, string title, string text, params Button[] bs)
     {
         Spin(false);
         Show("none");
-        Status("warn", title);
-        ShowHint(text, "warn");
-        SetButtons(Btn(okText, "Primary", () => Install(new List<Target> { t })), CloseBtn());
-        SystemSounds.Exclamation.Play();
+        Status(kind, title);
+        ShowHint(text, kind == "warn" ? "warn" : "info");
+        SetButtons(bs.Concat(new[] { CloseBtn() }).ToArray());
+        if (kind == "warn") SystemSounds.Exclamation.Play();
     }
 
     // ---------- install ----------
@@ -448,9 +526,11 @@ class InstallWindow
         if (ts.Count == 0) return;
         lastTargets = ts;
         bInstall = null;
+        backupPath = null;
         Busy(ts.Count == 1 ? "מתקין על " + ts[0].Dev.Model + "..." : "מתקין על " + ts.Count + " מכשירים...");
         log.Text = "";
         Show("log");
+        bool withData = restoreData && ts.Count == 1, keep = keepData && ts.Count == 1;
         Bg(() =>
         {
             var bad = new List<Target>();
@@ -458,32 +538,134 @@ class InstallWindow
             foreach (var t in ts)
             {
                 Append("── " + t.Dev.Name + " ──");
-                var files = pkg.SelectFor(t.Abis);
-                string args = files.Count == 1
-                    ? "install -r -d " + Adb.Q(files[0])
-                    : "install-multiple -r -d " + string.Join(" ", files.Select(f => Adb.Q(f)));
-                if (files.Count > 1) Append("מתקין " + files.Count + " קבצים: " + string.Join(", ", files.Select(f => Path.GetFileName(f))));
                 string o;
-                int code = Adb.Run("-s " + t.Dev.Serial + " " + args, out o);
-                Append(o + "\n");
-                bool ok = code == 0 && o.Contains("Success");
-                if (ok && pkg.Obbs.Count > 0)
-                {
-                    UiDo(() => Status("busy", "מעתיק קובצי OBB..."));
-                    foreach (var obb in pkg.Obbs)
-                    {
-                        string po;
-                        Adb.Run("-s " + t.Dev.Serial + " push " + Adb.Q(obb.Key) + " " + Adb.Q(obb.Value), out po);
-                        Append("OBB: " + po);
-                    }
-                }
-                if (!ok)
+                if (!InstallOn(t, out o))
                 {
                     bad.Add(t);
                     if (firstErr == null) firstErr = o;
                 }
             }
-            UiDo(() => Done(ts, bad, firstErr ?? ""));
+            if (keep && bad.Count == 1 && Adb.NeedsUninstall(firstErr))
+            {
+                Append("המכשיר לא מאפשר להתקין בלי להסיר את הגרסה הקיימת. מגבה אותה ומתקין מחדש עם הנתונים.");
+                UiDo(() => KeepDataReinstall(ts[0]));
+                return;
+            }
+            string warn = null, note = null;
+            if (withData && bad.Count == 0)
+            {
+                var problem = RestoreData(ts[0], pkg.DataDir);
+                if (problem == null) note = "הנתונים מהגיבוי הוחזרו לאפליקציה.";
+                else warn = "האפליקציה הותקנה, אבל הנתונים לא הוחזרו במלואם: " + problem;
+            }
+            UiDo(() => Done(ts, bad, firstErr ?? "", warn, note));
+        });
+    }
+
+    // Installs the file on one device and copies its OBB files. Runs in the background.
+    bool InstallOn(Target t, out string o)
+    {
+        var files = pkg.SelectFor(t.Abis);
+        if (files.Count > 1) Append("מתקין " + files.Count + " קבצים: " + string.Join(", ", files.Select(f => Path.GetFileName(f))));
+        bool ok = InstallFiles(t.Dev.Serial, files, out o);
+        Append(o + "\n");
+        if (ok && pkg.Obbs.Count > 0)
+        {
+            UiDo(() => Status("busy", "מעתיק קובצי OBB..."));
+            foreach (var obb in pkg.Obbs)
+            {
+                string po;
+                Adb.Run("-s " + t.Dev.Serial + " push " + Adb.Q(obb.Key) + " " + Adb.Q(obb.Value), out po);
+                Append("OBB: " + po);
+            }
+        }
+        return ok;
+    }
+
+    static bool InstallFiles(string serial, List<string> files, out string o)
+    {
+        string args = files.Count == 1
+            ? "install -r -d " + Adb.Q(files[0])
+            : "install-multiple -r -d " + string.Join(" ", files.Select(f => Adb.Q(f)));
+        return Adb.Run("-s " + serial + " " + args, out o) == 0 && o.Contains("Success");
+    }
+
+    // Puts backed-up data into the installed app (background). Returns null on success, otherwise the problem.
+    string RestoreData(Target t, string dataDir)
+    {
+        UiDo(() => { Status("busy", "משחזר את הנתונים..."); ShowHint("אם מופיעה בטלפון בקשה להרשאת root, יש לאשר אותה.", "info"); });
+        var why = Root.Acquire(t.Dev.Serial);
+        if (why != null) return why;
+        var problems = AppBackup.Restore(t.Dev.Serial, pkg.Info.Package, dataDir, Append);
+        return problems.Count == 0 ? null : problems[0];
+    }
+
+    // Reinstalls without losing the app's data (root): backs up the installed app and its data to the PC, uninstalls,
+    // installs the file and puts the data back. If the file fails to install, the previous version returns with its data.
+    void KeepDataReinstall(Target t)
+    {
+        var serial = t.Dev.Serial;
+        var p = pkg.Info.Package;
+        var fromFile = restoreData ? pkg.DataDir : null;
+        lastTargets = new List<Target> { t };
+        Busy("מבקש הרשאת root...");
+        ShowHint("אם מופיעה בטלפון בקשה להרשאת root, יש לאשר אותה.", "info");
+        Show("log");
+        Bg(() =>
+        {
+            var why = Root.Acquire(serial);
+            if (why != null) { UiDo(() => Fail("אין הרשאת root", why + " האפליקציה לא הוסרה.", log.Text, false)); return; }
+
+            UiDo(() => { Status("busy", "מגבה את " + AppTitle + " עם הנתונים..."); ShowHint(null, null); });
+            Adb.Shell(serial, "am force-stop " + p);
+            var tmp = AppBackup.NewTemp();
+            try
+            {
+                try
+                {
+                    AppBackup.Collect(serial, p, AppTitle, tmp, Append);
+                    Append("שומר את הגיבוי במחשב...");
+                    var saved = AppBackup.Pack(tmp, Settings.Sub(Settings.Backups), AppTitle, t.InstalledName);
+                    backupPath = saved;
+                    Append("הגיבוי נשמר: " + saved);
+                }
+                catch (Exception ex)
+                {
+                    UiDo(() => Fail("הגיבוי נכשל, והאפליקציה לא הוסרה", ex.Message, log.Text, false));
+                    return;
+                }
+
+                UiDo(() => Status("busy", "מסיר את הגרסה הקיימת..."));
+                var uo = Adb.Run("-s " + serial + " uninstall " + p);
+                Append("uninstall " + p + ": " + uo);
+                if (!uo.Contains("Success"))
+                {
+                    UiDo(() => Fail("ההסרה נכשלה", "הגרסה הקיימת לא הוסרה, ולכן הקובץ לא הותקן. הגיבוי נשמר במחשב.", log.Text, false));
+                    return;
+                }
+
+                UiDo(() => Status("busy", "מתקין את " + AppTitle + "..."));
+                string o;
+                if (!InstallOn(t, out o))
+                {
+                    UiDo(() => Status("busy", "ההתקנה נכשלה, מחזיר את הגרסה הקודמת..."));
+                    string ro;
+                    bool back = InstallFiles(serial, AppBackup.Apks(tmp), out ro);
+                    Append("החזרת הגרסה הקודמת: " + ro);
+                    string problem = back ? RestoreData(t, Path.Combine(tmp, AppBackup.DataFolder)) : null;
+                    string what = !back ? "לא ניתן היה להחזיר את הגרסה הקודמת. הגיבוי המלא נשמר במחשב, ואפשר להתקין אותו בלחיצה כפולה."
+                        : problem == null ? "הגרסה הקודמת הוחזרה למכשיר עם הנתונים שלה."
+                        : "הגרסה הקודמת הוחזרה, אבל הנתונים לא הוחזרו במלואם (" + problem + "). הגיבוי המלא נשמר במחשב.";
+                    UiDo(() => Fail("ההתקנה נכשלה", Adb.Explain(o) + "\n" + what, log.Text, false));
+                    return;
+                }
+
+                var failed = RestoreData(t, fromFile ?? Path.Combine(tmp, AppBackup.DataFolder));
+                UiDo(() => Done(lastTargets, new List<Target>(), "",
+                    failed == null ? null : "האפליקציה הותקנה, אבל הנתונים לא הוחזרו במלואם: " + failed + "\nהגיבוי המלא של הגרסה הקודמת נשמר במחשב.",
+                    (fromFile != null ? "הנתונים מהגיבוי הוחזרו לאפליקציה." : "הנתונים נשמרו.") + " גיבוי של הגרסה הקודמת עם הנתונים נשמר במחשב."));
+            }
+            finally { AppBackup.Delete(tmp); }
         });
     }
 
@@ -492,29 +674,31 @@ class InstallWindow
         UiDo(() => { log.AppendText(s.Replace("\r\n", "\n").Replace("\n", "\r\n") + "\r\n"); log.ScrollToEnd(); });
     }
 
-    void Done(List<Target> ts, List<Target> bad, string firstErr)
+    void Done(List<Target> ts, List<Target> bad, string firstErr, string warn = null, string note = null)
     {
         Spin(false);
         installedOn = ts.Where(t => !bad.Contains(t)).ToList();
         if (bad.Count == 0)
         {
-            Status("ok", "הותקן בהצלחה");
-            ShowHint(null, null);
-            Show("none");
+            Status(warn == null ? "ok" : "warn", "הותקן בהצלחה");
+            ShowHint(warn ?? note, warn != null ? "warn" : "info");
+            Show(warn != null ? "log" : "none");
             sub.Text = AppTitle + " הותקנה ב-" + string.Join(", ", ts.Select(t => t.Dev.Model));
             var buttonsList = new List<Button>();
             if (pkg.Info.Package != null) buttonsList.Add(Btn("פתח באפליקציה", "Primary", OpenApp));
+            if (backupPath != null) buttonsList.Add(Btn("הצג את הגיבוי", "Btn", ShowBackup));
             var close = CloseBtn();
             buttonsList.Add(close);
             SetButtons(buttonsList.ToArray());
-            StartCountdown(close);
+            if (warn == null && note == null) StartCountdown(close);
+            if (warn != null) SystemSounds.Exclamation.Play();
             return;
         }
         lastTargets = bad;
         failHead = ts.Count == 1 ? "ההתקנה נכשלה" : "ההתקנה נכשלה ב-" + bad.Count + " מתוך " + ts.Count + " מכשירים";
         failWhy = Adb.Explain(firstErr);
         failPkg = Adb.PackageFrom(firstErr) ?? pkg.Info.Package;
-        failOfferReinstall = failPkg != null && (Adb.SignatureMismatch(firstErr) || firstErr.Contains("VERSION_DOWNGRADE"));
+        failOfferReinstall = failPkg != null && Adb.NeedsUninstall(firstErr);
         ShowFailure();
         SystemSounds.Hand.Play();
         W.Activate();
@@ -554,17 +738,36 @@ class InstallWindow
         ((Button)closeTimer.Tag).Content = "סגור";
     }
 
+    // Keeping the data is offered when the only way forward is uninstalling and the device has root.
+    bool CanKeepData
+    {
+        get { return failOfferReinstall && failPkg == pkg.Info.Package && lastTargets.Count == 1 && lastTargets[0].HasRoot; }
+    }
+
     void ShowFailure()
     {
         Status("err", failHead);
         ShowHint(failWhy, "err");
         Show("log");
         var bs = new List<Button>();
-        if (failOfferReinstall) bs.Add(Btn("הסר והתקן מחדש", "Primary", AskReinstall));
-        bs.Add(Btn("נסה שוב", failOfferReinstall ? "Btn" : "Primary", () => Install(lastTargets)));
+        if (CanKeepData) bs.Add(Btn("התקן מחדש ושמור נתונים", "Primary", AskKeepData));
+        if (failOfferReinstall) bs.Add(Btn("הסר והתקן מחדש", CanKeepData ? "Btn" : "Primary", AskReinstall));
+        if (!CanKeepData) bs.Add(Btn("נסה שוב", failOfferReinstall ? "Btn" : "Primary", () => Install(lastTargets)));
         bs.Add(Btn("העתק פרטים", "Btn", CopyLog));
         bs.Add(CloseBtn());
         SetButtons(bs.ToArray());
+    }
+
+    void AskKeepData()
+    {
+        var t = lastTargets[0];
+        Status("warn", "להתקין מחדש ולשמור את הנתונים?");
+        ShowHint("כדי להתקין את הקובץ צריך להסיר את הגרסה הקיימת. במכשיר יש root, ולכן אפשר לשמור את הנתונים:\n"
+               + "1. האפליקציה והנתונים שלה יגובו למחשב, לתיקיית הגיבויים.\n"
+               + "2. הגרסה הקיימת תוסר מהמכשיר.\n"
+               + "3. הקובץ יותקן, ו" + (restoreData ? "הנתונים מהקובץ" : "הנתונים") + " יוחזרו אליו.\n"
+               + "אם ההתקנה תיכשל, הגרסה הקודמת תוחזר עם הנתונים שלה.\n" + (Downgrade(t) ? DataCaveat : LoginCaveat), "warn");
+        SetButtons(Btn("התחל", "Primary", () => KeepDataReinstall(t)), Btn("ביטול", "Btn", ShowFailure));
     }
 
     void AskReinstall()

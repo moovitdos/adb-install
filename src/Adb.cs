@@ -227,6 +227,12 @@ static class Adb
         return o.Contains("UPDATE_INCOMPATIBLE") || o.Contains("signatures do not match") || o.Contains("INCONSISTENT_CERTIFICATES");
     }
 
+    // Failures that only uninstalling the current version can get past.
+    public static bool NeedsUninstall(string o)
+    {
+        return SignatureMismatch(o) || o.Contains("VERSION_DOWNGRADE");
+    }
+
     public static string Explain(string o)
     {
         if (SignatureMismatch(o))
@@ -245,6 +251,8 @@ static class Adb
             return "אנדרואיד 14 ומעלה חוסם אפליקציות ישנות מאוד (targetSdk נמוך).";
         if (o.Contains("USER_RESTRICTED") || o.Contains("ABORTED"))
             return "ההתקנה נדחתה במכשיר. בשיאומי יש להפעיל 'התקנה דרך USB' באפשרויות המפתחים, ולאשר את החלון שמופיע בטלפון.";
+        if (o.Contains("DUPLICATE_PERMISSION"))
+            return "אפליקציה אחרת במכשיר כבר מגדירה הרשאה באותו שם, ולכן אנדרואיד חוסם את ההתקנה (קורה בגרסאות משוכפלות או חתומות מחדש של אותה אפליקציה).";
         if (o.Contains("TEST_ONLY"))
             return "זו אפליקציית test-only (דורשת את הדגל ‎-t).";
         if (o.Contains("NO_CERTIFICATES") || o.Contains("INVALID_APK") || o.Contains("PARSE_FAILED"))

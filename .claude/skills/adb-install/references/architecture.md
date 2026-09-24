@@ -10,6 +10,8 @@
 | `src/Common.cs` | `Theme`: palette (light/dark), shared XAML styles (buttons, input, thin scrollbars), UI building blocks, image loading, size formatting |
 | `src/Settings.cs` | `Settings` (key=value file in `%APPDATA%\ADB Install\settings.ini`, save folder + subfolders), `KnownFolders.Downloads`, `FolderPicker` (modern IFileOpenDialog via COM) |
 | `src/Adb.cs` | `Adb`: runs adb (`Run`, `RunBytes`, `Shell`), `Devices()`, `Info()` (battery/storage/IP), `InstalledVersion`, install error → Hebrew explanation (`Explain`), `Dev`, `DeviceInfo` |
+| `src/Root.cs` | `Root`: finds root (`Likely` without starting su, `Acquire` once per session: adbd root, `su -c` or the emulator's `su 0`), runs commands as root. `AppBackup`: pulls APKs, backs up / restores app data through `assets/appdata.sh`, packs a backup with data into one `.apks` |
+| `assets/appdata.sh` | Phone-side data backup/restore, pushed to `/data/local/tmp/adbinstall-appdata.sh`. Private storage (`/data/data`, `/data/user_de/0`) as root with owner + SELinux label copied from the fresh app folder; Android/data and obb as root on `/data/media` from Android 11 (owner = app, group ext_data_rw/ext_obb_rw, quota project 20000/40000 + app id), through `/sdcard` as shell before that; Android/media always through `/sdcard` |
 | `src/Phone.cs` | Phone-side features: the helper (`Apps`, `Icons`, `KeyboardServer`), disk stats, file listing (`List`, parses both toybox and old toolbox `ls -la`), runtime permissions + Hebrew names, `Sh()` quoting |
 | `src/Package.cs` | Reading APKs without aapt: `Axml` (binary XML), `Res` (resources.arsc), `ApkReader` (package, version, label, min SDK, icon incl. adaptive), `PackageFile` (APK or XAPK/APKS/APKM bundle, extracts splits and OBB, picks the ABI split for a device) |
 | `src/InstallWindow.cs` | Install window flow + `AppIcon` (draws legacy and adaptive icons) + `Target` |
@@ -32,8 +34,11 @@
 1. `PackageFile.Open(file)` — plain APK, or a bundle extracted to `%TEMP%\ADB Install\<id>` (deleted when the window closes). Shows the info card.
 2. `Adb.Devices()`; for each ready device: SDK, ABIs, installed version of the package.
 3. No devices → error with "refresh". None ready (unauthorized) → warning list. Preferred serial (from the main window) or a single ready device → `Consider()`; several → device picker with version comparison pills.
-4. `Consider()` stops to ask only for real risks: bundle on Android < 5 (error), app min SDK above the device (ask), downgrade (ask). Otherwise installs at once.
-5. `Install()` → `install -r -d` or `install-multiple -r -d` with `PackageFile.SelectFor(abis)`, then pushes OBB files. Success → "open app" + auto-close countdown (stops when the mouse enters). Failure → `Adb.Explain` text, log, and "uninstall and reinstall" when the signature/downgrade is the cause.
+4. `Consider(t, step)` stops to ask only for real risks, each answer continuing with the next check: bundle on Android < 5 (error), app min SDK above the device (ask), a file that carries data (`AskData`: restore it or not), downgrade (`AskDowngrade`; with root it offers to keep the data). Several devices from the list go through `InstallSelected`, one combined question. Otherwise installs at once.
+5. `Install()` → `install -r -d` or `install-multiple -r -d` with `PackageFile.SelectFor(abis)`, then pushes OBB files, then restores the file's data if chosen. Success → "open app" + auto-close countdown (stops when the mouse enters). Failure → `Adb.Explain` text, log, and "uninstall and reinstall" when the signature/downgrade is the cause (`Adb.NeedsUninstall`); with root also "reinstall and keep data".
+6. `KeepDataReinstall()` (root): backup of the installed app with its data to the backups folder → uninstall → install → restore data. If the install fails, the backed-up APKs go back with their data. Nothing is uninstalled unless the backup finished.
+
+A backup with data is an `.apks` whose root holds the APKs and whose `adbinstall-data/` folder holds `data.tar`, `user_de.tar`, `ext.tar`, `obb.tar`, `media.tar` (whichever had content) and `info.txt` (package, version, device, date, granted runtime permissions). `PackageFile.Open` sets `DataDir` when it finds that folder for the same package.
 
 ## Main window model
 

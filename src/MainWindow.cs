@@ -464,6 +464,7 @@ partial class MainWindow
     {
         StopLogcat();
         apps = null;
+        appsRoot = false;
         selectedApps.Clear();
         expandedPkg = null;
         explorerPath = "/sdcard";
@@ -518,11 +519,12 @@ partial class MainWindow
         Bg(() =>
         {
             var i = Adb.Info(serial);
+            bool hasRoot = Root.Likely(serial);
             UiDo(() =>
             {
                 tiles.Children.Clear();
                 tiles.Children.Add(Tile("דגם", i.Model, i.Manufacturer, -1));
-                tiles.Children.Add(Tile("אנדרואיד", i.Release, "API " + i.Sdk, -1));
+                tiles.Children.Add(Tile("אנדרואיד", i.Release, "API " + i.Sdk + (hasRoot ? " · עם root" : ""), -1));
                 tiles.Children.Add(Tile("סוללה", i.Battery >= 0 ? "‎" + i.Battery + "%" : "—", i.Charging ? "בטעינה" : "", i.Battery >= 0 ? i.Battery / 100.0 : -1));
                 if (i.StorageTotal > 0)
                     tiles.Children.Add(Tile("אחסון פנוי", Theme.Size(i.StorageFree), "מתוך " + Theme.Size(i.StorageTotal), 1 - i.StorageFree / (double)i.StorageTotal));
